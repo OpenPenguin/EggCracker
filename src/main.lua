@@ -2,14 +2,7 @@
     This is the entry point for the bootloader!
 ]]
 
---==========[ Define constants ]==========--
-local consts = {
-    version = {1,0,0},
-    bios_menu_delay = 5,
-    root_repo_url = "https://raw.githubusercontent.com/OpenPenguin/EggCracker/master"
-}
-
-function init(config)
+function init(config, consts)
     --==========[ Define shared variables! ]==========--
     -- General shared data
     local shared = {
@@ -27,10 +20,6 @@ function init(config)
         },
         bootable = false,
     }
-
-    --==========[ Get OcCli Objects ]==========--
-    local eeprom = component.list("eeprom")()
-    local component_invoke = component.invoke
 
     --==========[ Define helper methods ]==========--
     -- TODO: Get rid of this. It's just here for now to make development easier.
@@ -224,57 +213,21 @@ function init(config)
     -- @UNSAFE this hasn't been tested
     function sleep(seconds)
         local currentTime = os.time()
-        local endTime = currentTime + seconds
-        local shouldEscape = false
         repeat
             -- Just do SOMETHING to try and prevent a crash from looping!
             computer.uptime()
             currentTime = os.time()
-        until (currentTime >= endTime) or shouldEscape
-    end
-
-    -- @TODO check if this may actually be needed, lol
-    -- @UNSAFE this has not been tested!
-    function timeout(seconds, callback)
-        sleep(seconds)
-        callback()
-    end
-
-    --==========[ Compatiblity layer! ]==========--
-    do
-        if computer.getBootAddress == nil then
-            computer.getBootAddress = function()
-                return boot_invoke(eeprom, "getData")
-            end
-        end
-
-        if computer.setBootAddress == nil then
-            computer.setBootAddress = function(address)
-                return boot_invoke(eeprom, "setData", address)
-            end
-        end
+        until (currentTime >= currentTime + seconds) or shouldEscape
     end
 
     --==========[ Begin preboot process ]==========--
     -- Init the graphics system!
-    local video = {
-        -- Create placeholders for all the functions
-        clearScreen = function() end,
-        print = function() end,
-        println = function() end,
-        getSize = function() return {width=0,height=0} end,
-        isEnabled = function() return false end,
-        getData = function() return {} end,
-        update = function() end,
-        getCursor = function() return {x=0,y=0} end,
-        setCursor = function() end
-    }
+    local video = {}
     do
         local screen = component.list("screen")()
         local gpu = component.list("gpu")()
 
         if (not screen) and (not gpu) then
-            -- Ensure the "SupportsVideo" flag is disabled
             states.supports.video = false
             return
         end
@@ -287,79 +240,13 @@ function init(config)
         local _screen = component.proxy(screen)
         local _gpu = component.proxy(gpu)
 
-        video["data"] = {
-            x = 1,
-            y = 1,
-            lines = {}
-        }
-
-        -- Data getting methods
-        video.getData = function()
-            -- Return a whole bunch of data on the video system!
-            local data = {
-                screenOn = _screen.isOn(),
-                precise = _screen.isPrecise(),
-                foreground = _gpu.getForeground(),
-                background = _gpu.getBackground(),
-                maxDepth = _gpu.maxDepth(),
-                depth = _gpu.getDepth(),
-                maxResolution = _gpu.maxResolution(),
-                resolution = _gpu.getResolution()
-            }
-
-            --[[
-            local w, h = _gpu.getResolution()
-            data["width"] = w
-            data["height"] = h
-            ]]--
-
-            return data
-        end
-
-        video.getSize = function()
-            local width, height = _gpu.getResolution()
-            return {width = width, height = height}
-        end
-
-        video.isEnabled = function()
-            return true
-        end
-
-        video.getCursor = function()
-            return {
-                x = video["data"]["x"],
-                y = video["data"]["y"]
-            }
-        end
-
-        -- Operation methods (actually does stuff)
-        video.setCursor = function(x,y)
-            local width, height = _gpu.getResolution()
-            if x == "left" then
-                x = 1
-            elseif x == "right" then
-                x = width
-            end
-            if y == "top" then
-                y = 1
-            elseif y == "bottom" then
-                y = height
-            end
-
-            video["data"]["x"] = x
-            video["data"]["y"] = y
-        end
+        video["data"] = {x = 1, y = 1}
 
         video.clearScreen = function()
             local width, height = _gpu.getResolution()
             gpu.setForeground(0x000000)
             gpu.setBackground(0xFFFFFF)
             _gpu.fill(1, 1, width, height, "")
-        end
-
-        -- @TOOD use to implement more advanced text things, like text scrolling!
-        video.update = function()
-            local width, height = _gpu.getResolution()
         end
 
         video.print = function(...)
@@ -372,13 +259,8 @@ function init(config)
             for charnum = 1, strlen, 1 do
                 local char = string.sub(text, charnum, charnum)
 
-                if char == "\n" then
-                    video["data"]["y"] = video["data"]["y"] + 1
-                else
-                    -- The character is not a special symbol!
-                    _gpu.set(video["data"]["x"], video["data"]["y"], char)
-                    video["data"]["x"] = video["data"]["x"] + 1
-                end
+                _gpu.set(video["data"]["x"], video["data"]["y"], string.sub(text, charnum, charnum))
+                video["data"]["x"] = video["data"]["x"] + 1
 
                 -- Run cursor checks
                 do
@@ -405,17 +287,8 @@ function init(config)
 
     -- Get the keyboard!
     do
-        local screen = component.list("screen")()
-        if screen == nil then
-            states.supports.keyboard = false
-            return
-        end
-        local _screen = component.proxy(screen)
-
-        local keyboards = _screen.getKeyboards()
-        if keyboards == nil or #keyboards == 0 then
-            states.supports.keyboard = false
-        else
+        local keyboards = component.proxy(component.list("screen")()).getKeyboards()
+        if not (keyboards == nil or #keyboards == 0) then
             states.supports.keyboard = true
             shared.keyboards = {}
             for addr in pairs(keyboards) do
@@ -436,19 +309,6 @@ function init(config)
             else
                 states.supports.internet = true
                 video.println("Internet capibility found!")
-            end
-        end
-
-
-        -- 2. Network capibilities (In-game)
-        do
-            local devices = component.list("modem")()
-            if devices == nil or #devices == 0 then
-                states.supports.network = false
-                video.println("No network capibility found!")
-            else
-                states.supports.network = true
-                video.println("Network capibility found!")
             end
         end
 
@@ -482,10 +342,6 @@ function init(config)
             handle, reason = boot_invoke(address, "open", target)
         end
 
-        if not handle then
-            return false
-        end
-
         repeat
             data, reason = boot_invoke(address, "read", handle, math.huge)
             if not data and reason then
@@ -503,14 +359,6 @@ function init(config)
     end
 
     function checkDeviceForBootable(address)
-        --[[
-        local handle, reason = boot_invoke(address, "open", "/init.lua")
-        if not handle then
-            return false
-        else
-            return true, handle
-        end
-        ]]--
         local exists, reason = boot_invoke(address, "exists", "/init.lua")
         return exists
     end
@@ -538,21 +386,9 @@ function init(config)
         return addrs
     end
 
-    function bootOS(address, entryMethod)
-        -- Just for safety and expandability!
-        if not entryMethod then
-            -- We must get the entry method ourselves!
-            entryMethod = attemptBootFromDevice(address)
-        end
-
-        -- Let's boot!
-        println("Booting into operating system...")
-        computer.beep(1000, 0.2)
-        entryMethod()
-    end
-
     function standardBoot()
-        bootOS(computer.getBootAddress())
+        println("Booting into operating system...")
+        attemptBootFromDevice(computer.getBootAddress())()
     end
 
     --==========[ Define EFI ]==========--
@@ -625,34 +461,15 @@ function init(config)
             -- @TODO use the makeSelectionMenu() method to create this menu!
             -- Draw the screen
             clearScreen()
-            println("1. Select boot device")
-            println("2. Edit boot settings")
-            println("3. Network recovery mode")
-            println("4. Continue normal boot")
-
-            local keys_pressed, selection, target
-
-            repeat
-                repeat
-                    _, keys_pressed = getKeysPressedMin(shared.keyboards, {"1","2","3","4"})
-                    if #keys_pressed > 0 then
-                        selection = keys_pressed
-                    end
-                until selection
-
-                if selection["1"] ~= nil then
-                    target = boot_selector_menu
-                elseif selection["2"] ~= nil then
-                    target = boot_settings_menu
-                elseif selection["3"] ~= nil then
-                    target = run_network_recovery
-                elseif selection["4"] ~= nil then
-                    target = exit_efi
-                end
-            until target
-
+            local targets = {boot_selector_menu, boot_settings_menu, run_network_recovery, exit_efi}
+            local selection = makeSelectionMenu({
+                "Select boot device", 
+                "Edit boot settings", 
+                "Network recovery mode", 
+                "Continue normal boot"
+            })
             println("Loading selection!")
-            target()
+            targets[tonumber(selection)]()
         end
 
         local function boot_selector_menu()
@@ -672,7 +489,7 @@ function init(config)
 
             if entry ~= nil then
                 println("Booting target system...")
-                bootOS(boot_target, entry)
+                entry()
             else
                 println("Unable to boot to selected device!")
                 println("Shutting down!")
@@ -720,16 +537,15 @@ function init(config)
         end
 
         -- Define constants
-        local println = video.println
         
         -- Tell the user we are booting!
         video.clearScreen()
-        println("EggCracker version ", table.concat(consts["version"],"."), " booting!")
-        println("Press shift within the next ", consts["bios_menu_delay"], " seconds to open menu!")
+        video.println("EggCracker version ", table.concat(consts["version"],"."), " booting!")
+        video.println("Press shift within the next ", consts["bios_menu_delay"], " seconds to open menu!")
 
         -- Get important information
         shared.bootAddress = computer.getBootAddress()
-        println("Got boot address!")
+        video.println("Got boot address!")
 
         -- Check for interrupt!
         local intTriggered = false
@@ -750,10 +566,10 @@ function init(config)
 
         if intTriggered then
             computer.beep(1000, 0.2)
-            println("Interrupt detected! Attempting to start EFI menu...")
+            video.println("Interrupt detected! Attempting to start EFI menu...")
             launch_efi_menu()
         else
-            println("Running normal boot operations...")
+            video.println("Running normal boot operations...")
             standardBoot()
         end
     end
@@ -765,4 +581,4 @@ end
     The "init(...)" line ALWAYS must be the very last line in this file, otherwise things may
     break.
 ]]
-init({["allowEFIMenu"] = true})
+init({["allowEFIMenu"] = true},{version = {1,0,0},bios_menu_delay = 5,root_repo_url = "https://raw.githubusercontent.com/OpenPenguin/EggCracker/master"})
