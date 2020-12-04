@@ -1,0 +1,8 @@
+EggCracker Bootloader
+Version 1.0.0
+
+# About
+EggCracker is a more powerful bootloader than the default Lua EEPROM.
+
+# Sources
+Some libraries used are from outside developers. To see a list of which files come from outside developers and see their credits, view the "sources.md" file.
