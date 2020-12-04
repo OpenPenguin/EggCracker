@@ -1,0 +1,28 @@
+[
+    {
+        "id": "openos",
+        "url": "https://raw.githubusercontent.com/OpenPenguin/EggCracker/master/static/oses/openos.cpio",
+        "archive": {
+            "format": "cpio"
+        },
+        "version": ["unknown"],
+        "meta": {
+            "name": "Open OS",
+            "description": "The default operating system!",
+            "repo": "https://github.com/OpenPenguin/OpenOS"
+        }
+    },
+    {
+        "id": "plan9k",
+        "url": "https://raw.githubusercontent.com/OpenPenguin/EggCracker/master/static/oses/plan9k.cpio",
+        "archive": {
+            "format": "cpio"
+        },
+        "version": ["unknown"],
+        "meta": {
+            "name": "Plan9K",
+            "description": "A new operating system!",
+            "repo": "https://github.com/OpenPrograms/Plan9k"
+        }
+    }
+]
