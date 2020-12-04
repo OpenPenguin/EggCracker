@@ -4,7 +4,21 @@
     Rewritten to make it fit within the size constraints!
 ]]
 
+--local consts = {version = {1,0,0},bios_menu_delay = 5,root_repo_url = "https://raw.githubusercontent.com/OpenPenguin/EggCracker/master"}
+local shared = {}
+local states = {
+    supports = {
+        video = false,
+        keyboard = false,
+        internet = false,
+        network = false,
+        tmpfs = false
+    },
+    bootable = false,
+}
+
 -- Helpers
+--[[
 function boot_invoke(address, method, ...)
     local result = table.pack(pcall(component.invoke, address, method, ...))
     if not result[1] then
@@ -13,6 +27,7 @@ function boot_invoke(address, method, ...)
         return table.unpack(result, 2, result.n)
     end
 end
+]]--
 
 -- Load graphics system!
 local screen = component.list("screen")()
@@ -24,12 +39,17 @@ if (not screen) and (not gpu) then
 end
 
 if screen and gpu then
-    boot_invoke(gpu, "bind", screen)
+    component.invoke(gpu, "bind", screen)
     states.supports.video = true
+end
+
+function sleep(s)
+    computer.pullSignal(os.clock() + (s or 1))
 end
 
 local video = {data = {x = 1, y = 1}}
 do
+    local _gpu = component.proxy(gpu)
     video.clearScreen = function()
         local width, height = _gpu.getResolution()
         _gpu.fill(1, 1, width, height, "")
@@ -50,10 +70,12 @@ do
 
             -- Run cursor checks
             do
+                --[[
                 if video["data"]["x"] > width then
                     video["data"]["x"] = 1
                     video["data"]["y"] = video["data"]["y"] + 1
                 end
+                ]]
 
                 if video["data"]["y"] > height then
                     video.clearScreen()
@@ -65,27 +87,15 @@ do
     end
 
     video.println = function(...)
-        local text = {...}
-        table.insert(text, "\n")
-        video.print(table.unpack(text))
-    end
-end
-
--- Get the keyboard!
-do
-    local keyboards = component.proxy(component.list("screen")()).getKeyboards()
-    if not (keyboards == nil or #keyboards == 0) then
-        states.supports.keyboard = true
-        shared.keyboards = {}
-        for addr in pairs(keyboards) do
-            table.insert(shared.keyboards, component.proxy(addr))
-        end
+        video.print(...)
+        video["data"]["y"] = video["data"]["y"] + 1
+        video["data"]["x"] = 1
+        sleep()
     end
 end
 
 function readFile(address, target, isHandle, loadLua)
     local buffer = ""
-    local reason = nil
     local data = nil
 
     local handle
@@ -93,15 +103,13 @@ function readFile(address, target, isHandle, loadLua)
     if isHandle then
         handle = target
     else
-        local reason = nil
-        handle, reason = boot_invoke(address, "open", target)
+        -- handle, _ = boot_invoke(address, "open", target)
+        handle = component.invoke(address, "open", target)
     end
 
     repeat
-        data, reason = boot_invoke(address, "read", handle, math.huge)
-        if not data and reason then
-            return false, reason
-        end
+        -- data, _ = boot_invoke(address, "read", handle, math.huge)
+        data = component.invoke(address, "read", handle, math.huge)
         buffer = buffer .. (data or "")
     until not data
 
@@ -113,27 +121,32 @@ function readFile(address, target, isHandle, loadLua)
     end
 end
 
+--[[
 function checkDeviceForBootable(address)
+    component.invoke(address, "exists", "/init.lua")
     local exists, reason = boot_invoke(address, "exists", "/init.lua")
     return exists
 end
+]]--
 
 function attemptBootFromDevice(address)
-    local isBootable = checkDeviceForBootable(address)
+    -- address = computer.getBootAddress()
+    assert(address, "NO BOOT ADDR GIVEN")
+    local isBootable = component.invoke(address, "exists", "/init.lua")
     if not isBootable then
         return nil
     end
 
-    local entryPoint = readFile(address, "/init.lua", false, true)
-    boot_invoke(address, "close", handle)
-
+    local _, entryPoint = readFile(address, "/init.lua", false, true)
+    -- boot_invoke(address, "close", handle)
+    component.invoke(address, "close", handle)
     return entryPoint
 end
 
 function findAllBootableDevices()
     local addrs = {}
     for address, _ in component.list("filesystem") do
-        local bootable = checkDeviceForBootable(address)
+        local bootable = component.invoke(address, "exists", "/init.lua")
         if bootable then
             table.insert(addrs, address)
         end
@@ -142,8 +155,27 @@ function findAllBootableDevices()
 end
 
 function standardBoot()
-    println("Booting into operating system...")
-    attemptBootFromDevice(computer.getBootAddress())()
+    video.println("Booting into operating system...")
+    -- local ba = computer.getBootAddress()
+    -- boot_invoke(eeprom, "getData")
+    --[[
+    local ba
+    if computer.getBootAddress then
+        ba = computer.getBootAddress()
+    else
+        -- ba = component.invoke(assert(component.list("eeprom")(), "No EEPROM!"), "getData")
+    end
+    assert(ba, "No boot address found!")
+    ]]
+    local ba = findAllBootableDevices()
+    if #ba == 0 then
+        assert(nil, "NO BOOTABLE DEVICES FOUND!")
+    end
+    local e = attemptBootFromDevice(assert(ba[1], "No boot address found!"))
+    computer.getBootAddress = function()
+        return ba[1]
+    end
+    e()
 end
 
 -- Define the EFI menu
@@ -195,7 +227,7 @@ do
 
         for index, text in pairs(options) do
             if genChoices then
-                table.insert(choices, index)
+                table.insert(choices, assert(index, "No index!"))
             end
             println(options[index], ". ", text)
         end
@@ -221,14 +253,14 @@ do
             "Network recovery mode", 
             "Continue normal boot"
         })
-        println("Loading selection!")
+        video.println("Loading selection!")
         targets[tonumber(selection)]()
     end
 
     local function boot_selector_menu()
         -- Get the screen ready!
         clearScreen()
-        println("Getting bootable devices...")
+        video.println("Getting bootable devices...")
 
         -- Get a list of all bootable devices
         local devices = findAllBootableDevices()
@@ -241,11 +273,11 @@ do
         local entry = attemptBootFromDevice(boot_target)
 
         if entry ~= nil then
-            println("Booting target system...")
+            video.println("Booting target system...")
             entry()
         else
-            println("Unable to boot to selected device!")
-            println("Shutting down!")
+            video.println("Unable to boot to selected device!")
+            video.println("Shutting down!")
             computer.shutdown()
             return
         end
@@ -254,14 +286,14 @@ do
     -- @TODO implement
     local function boot_settings_menu()
         clearScreen()
-        println("Boot settings menu is not currently implemented!")
-        println("System will shutdown in five seconds!")
-        sleep(5)
+        video.println("Boot settings menu is not currently implemented!")
+        video.println("System will shutdown in five seconds!")
+        -- sleep(5)
         computer.shutdown()
     end
 
     local function exit_efi()
-        println("Exiting EFI system...")
+        video.println("Exiting EFI system...")
         standardBoot()
     end
 
@@ -276,7 +308,7 @@ end
 do
     -- Define helpers
     local function runWhileTimer(seconds, method)
-        local currentTime = os.time()
+        local currentTime = os.clock()
         local endTime = currentTime + seconds
         local shouldEscape = false
 
@@ -285,7 +317,7 @@ do
             if r then
                 shouldEscape = true
             end
-            currentTime = os.time()
+            currentTime = os.clock()
         until (currentTime >= endTime) or shouldEscape
     end
 
@@ -293,32 +325,56 @@ do
     
     -- Tell the user we are booting!
     video.clearScreen()
-    video.println("EggCracker version ", table.concat(consts["version"],"."), " booting!")
-    video.println("Press shift within the next ", consts["bios_menu_delay"], " seconds to open menu!")
+    video.println("EggCracker version 1.0.0 booting!")
+    video.println("Waiting for 5 seconds...")
 
-    -- Get important information
-    shared.bootAddress = computer.getBootAddress()
-    video.println("Got boot address!")
+    -- Sleep
+    local now = os.clock()
+    sleep(3)
+
+    computer.beep(1000, 0.2)
+    computer.beep(1000, 0.2)
+    computer.beep(1000, 0.2)
+
+    video.println("Press shift within the next 5 seconds to open menu!")
 
     -- Check for interrupt!
     local intTriggered = false
     if states.supports.keyboard then
-        runWhileTimer(consts["bios_menu_delay"], function()
-            for _, keyboard in pairs(shared.keyboards) do
-                if keyboard.isShiftDown() then
-                    intTriggered = true
-                    return true
-                end
+        --[[
+        runWhileTimer(5, function()
+            if component.invoke(keyboard, "isShiftDown") then
+                intTriggered = true
+                return true
             end
         end)
+        ]]--
+
+        local signal_name, _, _, _ = computer.pullSignal()
+        if signal_name == "key_down" then
+            intTriggered = true
+            return true
+        end
+
+        --[[
+        runWhileTimer(5, function()
+            local signal_name, _, _, _ = computer.pullSignal()
+            if signal_name == "key_down" then
+                intTriggered = true
+                return true
+            end
+        end)
+        ]]--
     end
 
     if intTriggered then
         computer.beep(1000, 0.2)
         video.println("Interrupt detected! Attempting to start EFI menu...")
+        -- sleep(5)
         launch_efi_menu()
     else
         video.println("Running normal boot operations...")
+        sleep(5)
         standardBoot()
     end
 end
